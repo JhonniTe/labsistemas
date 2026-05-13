@@ -65,7 +65,15 @@ const Inventory = () => {
     const { error } = await supabase.from('assets').insert([payload]);
     setSaving(false);
     if (error) {
-      setFormError(error.message.includes('unique') ? 'El código de barras ya existe.' : error.message);
+      if (error.message.includes('unique') || error.code === '23505') {
+        setFormError('El código de barras ya está registrado. Usa uno diferente.');
+      } else if (error.message.includes('Failed to fetch') || error.message.includes('fetch')) {
+        setFormError('No se pudo conectar a la base de datos. Verifica tu conexión a internet.');
+      } else if (error.message.includes('JWT') || error.message.includes('anon')) {
+        setFormError('Error de autenticación. Recarga la página e intenta de nuevo.');
+      } else {
+        setFormError('Error al guardar: ' + error.message);
+      }
     } else {
       setShowModal(false);
       fetchData();
