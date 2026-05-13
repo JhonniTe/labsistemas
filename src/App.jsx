@@ -7,29 +7,20 @@ import Movements from './pages/Movements';
 import Maintenance from './pages/Maintenance';
 import MapView from './pages/Map';
 import Login from './pages/Login';
-import { supabase } from './supabaseClient';
+import { auth } from './firebaseClient';
 import { useEffect, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 
 const ProtectedRoute = ({ children }) => {
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // undefined = loading, null = not logged in, object = logged in
+  const [user, setUser] = useState(undefined);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoading(false);
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-    });
-
-    return () => subscription.unsubscribe();
+    const unsubscribe = onAuthStateChanged(auth, (u) => setUser(u));
+    return unsubscribe;
   }, []);
 
-  if (loading) {
+  if (user === undefined) {
     return (
       <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <p>Verificando credenciales...</p>
@@ -38,7 +29,7 @@ const ProtectedRoute = ({ children }) => {
   }
 
   const isGuest = localStorage.getItem('isGuest') === 'true';
-  return (session || isGuest) ? children : <Navigate to="/login" replace />;
+  return (user || isGuest) ? children : <Navigate to="/login" replace />;
 };
 
 function App() {
@@ -46,7 +37,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
-        
+
         <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/login" replace />} />
           <Route path="dashboard" element={<Dashboard />} />

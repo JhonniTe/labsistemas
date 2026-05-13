@@ -1,6 +1,14 @@
 import { Package, AlertTriangle, ArrowRightLeft, Wrench, Loader2, RefreshCw } from 'lucide-react';
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '../supabaseClient';
+import { db } from '../firebaseClient';
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  limit,
+} from 'firebase/firestore';
 import './Dashboard.css';
 
 const MOVEMENT_BADGE = {
@@ -9,8 +17,14 @@ const MOVEMENT_BADGE = {
   consumo: 'success',
 };
 
-const timeAgo = (isoString) => {
-  const diff = Math.floor((Date.now() - new Date(isoString)) / 1000);
+const toDate = (val) => {
+  if (!val) return new Date();
+  if (val.toDate) return val.toDate(); // Firestore Timestamp
+  return new Date(val);
+};
+
+const timeAgo = (val) => {
+  const diff = Math.floor((Date.now() - toDate(val)) / 1000);
   if (diff < 60) return `Hace ${diff}s`;
   if (diff < 3600) return `Hace ${Math.floor(diff / 60)} min`;
   if (diff < 86400) return `Hace ${Math.floor(diff / 3600)} h`;
@@ -26,53 +40,47 @@ const Dashboard = () => {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
+    try {
+      // 1. Assets
+      const assetsSnap = await getDocs(collection(db, 'assets'));
+      const assets = assetsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const totalAssets = assets.length;
+      const activeLoans = assets.filter(a => a.status === 'en_prestamo').length;
 
-    const [
-      { count: totalAssets },
-      { count: activeLoans },
-      { data: consumables },
-      { count: pendingMaint },
-      { data: recentMovements },
-    ] = await Promise.all([
-      supabase.from('assets').select('*', { count: 'exact', head: true }),
-      supabase.from('assets').select('*', { count: 'exact', head: true }).eq('status', 'en_prestamo'),
-      supabase.from('consumables').select('name, unit, stock_current, stock_minimum'),
-      supabase.from('maintenance_tickets').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-      supabase
-        .from('movements')
-        .select('id, operation_type, responsible_name, quantity, created_at, item_type, item_id, areas(name)')
-        .order('created_at', { ascending: false })
-        .limit(8),
-    ]);
+      // 2. Consumables - low stock
+      const consumablesSnap = await getDocs(collection(db, 'consumables'));
+      const consumables = consumablesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const lowStockItems = consumables.filter(c => c.stock_current <= c.stock_minimum);
 
-    // Consumables below minimum
-    const lowStockItems = (consumables || []).filter(c => c.stock_current <= c.stock_minimum);
+      // 3. Pending maintenance
+      const maintQ = query(collection(db, 'maintenance_tickets'), where('status', '==', 'pending'));
+      const maintSnap = await getDocs(maintQ);
 
-    setStats({
-      totalAssets: totalAssets ?? 0,
-      activeLoans: activeLoans ?? 0,
-      lowStock: lowStockItems.length,
-      pendingMaint: pendingMaint ?? 0,
-    });
-    setAlerts(lowStockItems);
-    setMovements(recentMovements || []);
-    setLastUpdated(new Date());
+      // 4. Recent movements
+      const movQ = query(
+        collection(db, 'movements'),
+        orderBy('createdAt', 'desc'),
+        limit(8)
+      );
+      const movSnap = await getDocs(movQ);
+      const recentMovements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      setStats({
+        totalAssets,
+        activeLoans,
+        lowStock: lowStockItems.length,
+        pendingMaint: maintSnap.size,
+      });
+      setAlerts(lowStockItems);
+      setMovements(recentMovements);
+      setLastUpdated(new Date());
+    } catch (err) {
+      console.error('Dashboard fetch error:', err);
+    }
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    fetchAll();
-
-    // Realtime: refresh on any change to movements or assets
-    const channel = supabase
-      .channel('dashboard-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'movements' }, fetchAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'assets' }, fetchAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'consumables' }, fetchAll)
-      .subscribe();
-
-    return () => supabase.removeChannel(channel);
-  }, [fetchAll]);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const statCards = [
     { title: 'Total Activos', value: stats.totalAssets, icon: Package, color: 'primary', trend: 'Equipos registrados' },
@@ -127,7 +135,7 @@ const Dashboard = () => {
       </div>
 
       <div className="grid-cols-3">
-        {/* Recent Movements Table */}
+        {/* Recent Movements */}
         <div className="glass-panel col-span-2 p-6">
           <h2 className="mb-4 text-xl">Movimientos Recientes</h2>
           <div className="table-container">
@@ -136,7 +144,7 @@ const Dashboard = () => {
                 <tr>
                   <th>Tipo</th>
                   <th>Responsable</th>
-                  <th>Destino / Área</th>
+                  <th>Destino</th>
                   <th>Cant.</th>
                   <th>Tiempo</th>
                 </tr>
@@ -144,14 +152,13 @@ const Dashboard = () => {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan="5" className="text-center" style={{ padding: '2rem' }}>
-                      <Loader2 className="animate-spin text-primary mx-auto mb-2" />
-                      Cargando movimientos...
+                    <td colSpan="5" style={{ textAlign: 'center', padding: '2rem' }}>
+                      <Loader2 className="animate-spin text-primary" style={{ margin: '0 auto' }} />
                     </td>
                   </tr>
                 ) : movements.length === 0 ? (
                   <tr>
-                    <td colSpan="5" className="text-center text-muted" style={{ padding: '2rem' }}>
+                    <td colSpan="5" style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2rem' }}>
                       No hay movimientos registrados aún.
                     </td>
                   </tr>
@@ -164,9 +171,9 @@ const Dashboard = () => {
                         </span>
                       </td>
                       <td className="font-medium">{mov.responsible_name}</td>
-                      <td>{mov.areas?.name || '—'}</td>
+                      <td>{mov.destination_area_name || '—'}</td>
                       <td>{mov.quantity}</td>
-                      <td className="text-muted">{timeAgo(mov.created_at)}</td>
+                      <td className="text-muted">{timeAgo(mov.createdAt)}</td>
                     </tr>
                   ))
                 )}
@@ -181,7 +188,7 @@ const Dashboard = () => {
           <div className="flex-col gap-4">
             {loading ? (
               <div style={{ textAlign: 'center', padding: '1rem' }}>
-                <Loader2 className="animate-spin text-warning mx-auto" />
+                <Loader2 className="animate-spin text-warning" style={{ margin: '0 auto' }} />
               </div>
             ) : alerts.length === 0 ? (
               <div className="alert-item" style={{ borderColor: 'rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.05)' }}>

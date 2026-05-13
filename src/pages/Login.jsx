@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Layers, ArrowRight, Loader2 } from 'lucide-react';
-import { supabase } from '../supabaseClient';
+import { auth } from '../firebaseClient';
+import { signInWithEmailAndPassword } from 'firebase/auth';
 import { useNavigate } from 'react-router-dom';
 import './Login.css';
 
@@ -15,30 +16,32 @@ const Login = () => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    
-    // Autenticación real con Supabase
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
 
-    if (error) {
-      if (error.message.includes('Invalid login credentials')) {
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      navigate('/dashboard');
+    } catch (err) {
+      if (
+        err.code === 'auth/user-not-found' ||
+        err.code === 'auth/wrong-password' ||
+        err.code === 'auth/invalid-credential'
+      ) {
         setError('Credenciales incorrectas. Verifica tu correo y contraseña.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Demasiados intentos fallidos. Espera unos minutos.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setError('Sin conexión a internet. Verifica tu red.');
       } else {
-        setError(error.message);
+        setError('Error: ' + err.message);
       }
       setLoading(false);
-    } else {
-      navigate('/dashboard');
     }
   };
 
   const handleTestLogin = () => {
-    // Para pruebas rápidas si no han creado un usuario en Supabase aún.
     localStorage.setItem('isGuest', 'true');
     navigate('/dashboard');
-  }
+  };
 
   return (
     <div className="login-container animate-fade-in">
@@ -52,7 +55,7 @@ const Login = () => {
         </div>
 
         {error && (
-          <div className="login-error text-danger bg-danger" style={{ background: 'rgba(220, 38, 38, 0.1)' }}>
+          <div className="login-error text-danger" style={{ background: 'rgba(220, 38, 38, 0.1)', padding: '0.75rem 1rem', borderRadius: '0.5rem', marginBottom: '1rem', fontSize: '0.875rem' }}>
             {error}
           </div>
         )}
@@ -60,33 +63,26 @@ const Login = () => {
         <form onSubmit={handleLogin} className="login-form">
           <div className="input-group">
             <label className="input-label">Correo Electrónico</label>
-            <input 
-              type="email" 
-              className="input-field" 
+            <input
+              type="email"
+              className="input-field"
               placeholder="admin@laboratorio.edu"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              required 
-            />
-          </div>
-          
-          <div className="input-group">
-            <label className="input-label">Contraseña</label>
-            <input 
-              type="password" 
-              className="input-field" 
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required 
+              required
             />
           </div>
 
-          <div className="flex justify-between items-center mb-6">
-            <label className="flex items-center gap-2 text-sm text-muted">
-              <input type="checkbox" /> Recordarme
-            </label>
-            <a href="#" className="text-sm text-primary" style={{ textDecoration: 'none' }}>¿Olvidaste tu clave?</a>
+          <div className="input-group">
+            <label className="input-label">Contraseña</label>
+            <input
+              type="password"
+              className="input-field"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
           </div>
 
           <button type="submit" disabled={loading} className="btn btn-primary login-btn">
@@ -96,7 +92,7 @@ const Login = () => {
         </form>
 
         <div className="login-footer">
-          <p className="text-muted text-sm text-center mb-4">¿No tienes cuenta de Auxiliar?</p>
+          <p className="text-muted text-sm text-center mb-4">¿Sin cuenta? Usa el modo prueba</p>
           <button className="btn btn-outline" style={{ width: '100%' }} onClick={handleTestLogin}>
             Entrar como Invitado (Modo Prueba)
           </button>
